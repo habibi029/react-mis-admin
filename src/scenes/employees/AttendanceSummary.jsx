@@ -1,260 +1,242 @@
-import React, { useState, useContext, useEffect, useRef } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Box,
-  useTheme,
-  Grid,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
   Typography,
-  Button,
-  Card,
-  CardContent,
-  
+  Paper,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  useTheme,
+  Stack,
+  CircularProgress,
 } from "@mui/material";
-import { DataGrid } from "@mui/x-data-grid";
+import { DatePicker } from "@mui/x-date-pickers/DatePicker";
+import { LocalizationProvider } from "@mui/x-date-pickers/LocalizationProvider";
+import { AdapterDayjs } from "@mui/x-date-pickers/AdapterDayjs";
+import dayjs from "dayjs";
 import { tokens } from "../../theme";
-import Header from "../../components/Header";
-import { AuthContext } from "../../context/AuthContext";
-import { useNavigate } from "react-router-dom";
-import axios from "axios";
-import AccessTimeIcon from "@mui/icons-material/AccessTime";
-import PlayArrowIcon from "@mui/icons-material/PlayArrow";
-import StopIcon from "@mui/icons-material/Stop";
-import { useAlert } from "../../context/AlertContext";
-import AttendanceSummary from "./AttendanceSummary";
 
-const EmployeeAttendance = () => {
+const AttendanceSummary = ({
+  attendanceRecords = [],
+  employees = [],
+  selectedStaffId,
+  setSelectedStaffId,
+  showAlert, // Added to show alerts on errors
+  isLoading,
+}) => {
   const theme = useTheme();
   const colors = tokens(theme.palette.mode);
-  const { authToken } = useContext(AuthContext);
-  const showAlert = useAlert();
-  const navigate = useNavigate();
-  const timerRef = useRef(null);
 
-  const [attendanceRecords, setAttendanceRecords] = useState([]);
-  const [employeesAttendance, setEmployeesAttendance] = useState([]);
-  const [employees, setEmployees] = useState([]);
-  const [selectedStaffId, setSelectedStaffId] = useState(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [currentTime, setCurrentTime] = useState(new Date());
-  const [selectedAttendance, setSelectedAttendance] = useState(null);
-  const [newAttendanceStatus, setNewAttendanceStatus] = useState("");
-  const [open, setOpen] = useState(false);
-  const [timeRecordingStatus, setTimeRecordingStatus] = useState(null);
-
-  const formatTime = (date) => date.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
-  const formatDate = (date) => date.toISOString().split("T")[0];
+  const [fromDate, setFromDate] = useState(null);
+  const [toDate, setToDate] = useState(null);
 
   useEffect(() => {
-    timerRef.current = setInterval(() => {
-      setCurrentTime(new Date());
-    }, 1000);
-    return () => clearInterval(timerRef.current);
-  }, []);
-
-  const fetchEmployees = async () => {
-    try {
-      const res = await axios.get("http://localhost:8000/api/admin/show-staff", {
-        headers: { Authorization: `Bearer ${authToken}` }
-      });
-      setEmployees(res.data.data);
-    } catch (err) {
-      console.error("Fetch employees failed", err);
-      if (err.response?.status === 401) {
-        showAlert("Session expired. Please login again.", "error");
-        navigate("/");
-      } else {
-        showAlert("Error fetching employees", "error");
-      }
+    if (fromDate && toDate && fromDate.isAfter(toDate)) {
+      showAlert("From date cannot be after To date", "warning");
     }
-  };
-  
+  }, [fromDate, toDate]);
 
-  const fetchAttendanceData = async () => {
-    setIsLoading(true);
-    try {
-      const res = await axios.get("http://localhost:8000/api/admin/show-attendance-list", {
-        headers: { Authorization: `Bearer ${authToken}` }
-      });
+  // Update the filtered records logic
+  const filteredRecords = attendanceRecords.filter((record) => {
+    const recordDate = dayjs(record.date);
+    const matchesStaff = !selectedStaffId || record.staff_id === selectedStaffId;
+    const matchesFromDate = !fromDate || recordDate.isAfter(fromDate, "day") || recordDate.isSame(fromDate, "day");
+    const matchesToDate = !toDate || recordDate.isBefore(toDate, "day") || recordDate.isSame(toDate, "day");
+    return matchesStaff && matchesFromDate && matchesToDate;
+  });
+  
+  // Update the calculate summary function
+  const calculateSummary = () => {
+    if (!selectedStaffId) return { presentDays: 0, halfDays: 0, absentDays: 0, totalHours: 0 };
+  
+    let presentDays = 0;
+    let halfDays = 0;
+    let absentDays = 0;
+    let totalHours = 0;
+  
+    filteredRecords.forEach((record) => {
+      const inTime = record.clock_in_time ? dayjs(record.clock_in_time) : null;
+      const outTime = record.clock_out_time ? dayjs(record.clock_out_time) : null;
       
-      const formatted = res.data.data.map((a) => ({
-        id: a.id,
-        name: a.staff.fullname, // Assuming staff relation is loaded
-        date: a.date,
-        in: a.clock_in_time ? new Date(a.clock_in_time).toLocaleTimeString() : "N/A",
-        out: a.clock_out_time ? new Date(a.clock_out_time).toLocaleTimeString() : "N/A",
-        staffId: a.staff_id
-      }));
+      // Calculate hours if both in and out times exist
+      const hoursWorked = (inTime && outTime) ? outTime.diff(inTime, 'hour', true) : 0;
       
-      setEmployeesAttendance(formatted);
-      setAttendanceRecords(res.data.data);
-    } catch (err) {
-      console.error("Fetch attendance failed", err);
-      if (err.response?.status === 401) {
-        showAlert("Session expired. Please login again.", "error");
-        navigate("/");
-      } else {
-        showAlert("Error fetching attendance data", "error");
+      // Use the attendance status from the database
+      switch(record.attendance) {
+        case 'present':
+          presentDays++;
+          break;
+        case 'halfday':
+          halfDays++;
+          break;
+        case 'absent':
+          absentDays++;
+          break;
       }
-    } finally {
-      setIsLoading(false);
-    }
+  
+      totalHours += hoursWorked;
+    });
+  
+    return { presentDays, halfDays, absentDays, totalHours: Math.round(totalHours * 100) / 100 };
   };
 
+  // Update the table to include more information
+  <TableContainer component={Paper} sx={{ backgroundColor: colors.primary[400] }}>
+    <Table>
+      <TableHead>
+        <TableRow>
+          <TableCell>ID</TableCell>
+          <TableCell>Date</TableCell>
+          <TableCell>Clock In</TableCell>
+          <TableCell>Clock Out</TableCell>
+        </TableRow>
+      </TableHead>
+      <TableBody>
+        {filteredRecords.map((record) => (
+          <TableRow key={record.id}>
+            <TableCell>{record.id}</TableCell>
+            <TableCell>{dayjs(record.date).format("YYYY-MM-DD")}</TableCell>
+            <TableCell>
+              {record.clock_in_time ? dayjs(record.clock_in_time).format("HH:mm:ss") : "Not clocked in"}
+            </TableCell>
+            <TableCell>
+              {record.clock_out_time ? dayjs(record.clock_out_time).format("HH:mm:ss") : "Not clocked out"}
+            </TableCell>
+            <TableCell>
+              <Typography
+                color={
+                  record.attendance === "present" ? "success.main" :
+                  record.attendance === "absent" ? "error.main" : "warning.main"
+                }
+              >
+                {record.attendance}
+              </Typography>
+            </TableCell>
+            <TableCell>{record.reason || "-"}</TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  </TableContainer>
 
-  const handleClockInOut = async (type) => {
-    if (!selectedStaffId) {
-      showAlert("Select employee first", "warning");
-      return;
-    }
-  
-    const currentDateTime = new Date();
-    
-    const requestData = {
-      staff_id: selectedStaffId,
-      date: formatDate(currentDateTime),
-      clock_type: type,
-      time: formatTime(currentDateTime)
-    };
-  
-    console.log('Request Data:', requestData); // Debug log
-  
-    try {
-      const response = await axios.post(
-        "http://localhost:8000/api/admin/clock",
-        requestData,
-        {
-          headers: {
-            Authorization: `Bearer ${authToken}`,
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-          },
-        }
-      );
-  
-      console.log('Response:', response.data); // Debug log
-  
-      showAlert(`Clock ${type} recorded successfully`, "success");
-      setTimeRecordingStatus(null);
-      fetchAttendanceData();
-    } catch (err) {
-      console.error(`Time ${type} failed:`, err);
-  
-      if (err.response) {
-        console.error("Server response:", err.response.data);
-        showAlert(`Failed to record time ${type}: ${err.response.data.message || err.response.statusText}`, "error");
-      } else if (err.request) {
-        console.error("No response from server:", err.request);
-        showAlert(`Failed to record time ${type}: No response from server`, "error");
-      } else {
-        console.error("Error", err.message);
-        showAlert(`Error: ${err.message}`, "error");
-      }
-    }
-  };
-  
-  
-  const handleClickOpen = (row) => {
-    setSelectedAttendance(row);
-    setOpen(true);
-  };
+  const summary = calculateSummary();
 
-  const handleClose = () => {
-    setOpen(false);
-    setSelectedAttendance(null);
-    setNewAttendanceStatus("");
-  };
-
-  const staffAttendance = selectedStaffId ? employeesAttendance.filter((r) => r.staffId === selectedStaffId) : [];
-
-  const columns = [
-    { field: "id", headerName: "ID", width: 70 },
-    { field: "name", headerName: "Name", flex: 1 },
-    { field: "date", headerName: "Date", flex: 1 },
-    { field: "in", headerName: "Clock In", flex: 1 },
-    { field: "out", headerName: "Clock Out", flex: 1 },
-   
-  ];
-
-  // Add this after other useEffects
-  useEffect(() => {
-    const refreshInterval = setInterval(() => {
-      if (selectedStaffId) {
-        fetchAttendanceData();
-      }
-    }, 60000); // Refresh every minute
-  
-    return () => clearInterval(refreshInterval);
-  }, [selectedStaffId]);
-
-  useEffect(() => {
-    if (!authToken) return navigate("/");
-    fetchEmployees();
-    fetchAttendanceData();
-  }, [authToken, navigate]);
+  if (isLoading) return <CircularProgress />;
 
   return (
-    <Box m="20px">
-      <Header title="Employee's Attendance" subtitle="Records of Employee's Attendance" />
+    <Box>
+      <Box mb={2}>
+        <Stack
+          spacing={2}
+          padding={2}
+          borderRadius={1}
+          backgroundColor={colors.primary[400]}
+          direction={{ xs: "column", sm: "row" }}
+          alignItems="flex-start"
+          sx={{ width: "fit-content" }}
+        >
+          <FormControl sx={{ minWidth: 220 }}>
+            <InputLabel id="select-staff-label">Select Staff Member</InputLabel>
+            <Select
+              labelId="select-staff-label"
+              id="select-staff"
+              value={selectedStaffId}
+              label="Select Staff Member"
+              onChange={(e) => setSelectedStaffId(e.target.value)}
+            >
+              <MenuItem key={"all"} value={""}>
+                <em>-- All --</em>
+              </MenuItem>
+              {employees.map((staff) => (
+                <MenuItem key={staff.id} value={staff.id}>
+                  {staff.fullname}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
 
-      <Card sx={{ mb: 3, backgroundColor: colors.primary[400] }}>
-        <CardContent>
-          <Grid container spacing={2} alignItems="center">
-            <Grid item xs={12} md={4}>
-              <Typography variant="h5" display="flex" alignItems="center">
-                <AccessTimeIcon sx={{ mr: 1 }} />
-                Current Time: {formatTime(currentTime)}
-              </Typography>
-            </Grid>
-            <Grid item xs={12} md={8}>
-              <Box display="flex" gap={2}>
-                <Button
-                  variant="contained"
-                  color="success"
-                  startIcon={<PlayArrowIcon />}
-                  onClick={() => handleClockInOut("in")}
-                  disabled={timeRecordingStatus === "in"}
-                  sx={{ flex: 1 }}
-                >
-                  {timeRecordingStatus === "in" ? "Processing..." : "Clock In"}
-                </Button>
-                <Button
-                  variant="contained"
-                  color="error"
-                  startIcon={<StopIcon />}
-                  onClick={() => handleClockInOut("out")}
-                  disabled={timeRecordingStatus === "out"}
-                  sx={{ flex: 1 }}
-                >
-                  {timeRecordingStatus === "out" ? "Processing..." : "Clock Out"}
-                </Button>
-              </Box>
-            </Grid>
-          </Grid>
-        </CardContent>
-      </Card>
-
-      {employees.length > 0 && (
-        <AttendanceSummary
-          attendanceRecords={attendanceRecords}
-          employees={employees}
-          selectedStaffId={selectedStaffId}
-          setSelectedStaffId={setSelectedStaffId}
-          handleClickOpen={handleClickOpen}
-        />
-      )}
-
-      <Box mb={"20px"} height="75vh" sx={{ "& .MuiDataGrid-root": { border: "none" } }}>
-        <DataGrid
-          rows={employeesAttendance}
-          columns={columns}
-          pageSize={5}
-          rowsPerPageOptions={[5]}
-          checkboxSelection
-        />
+          {selectedStaffId && (
+            <LocalizationProvider dateAdapter={AdapterDayjs}>
+              <DatePicker
+                label="From Date"
+                value={fromDate}
+                onChange={(newValue) => setFromDate(newValue)}
+              />
+              <DatePicker
+                label="To Date"
+                value={toDate}
+                onChange={(newValue) => setToDate(newValue)}
+              />
+            </LocalizationProvider>
+          )}
+        </Stack>
       </Box>
 
-    
+      {selectedStaffId && (
+        <>
+          <Box mb={2}>
+            <Paper elevation={3} sx={{ p: 3, mb: 2, backgroundColor: colors.primary[400] }}>
+              <Typography variant="h6" gutterBottom>
+                Attendance Summary
+              </Typography>
+              <Box display="flex" gap={4}>
+                <Box>
+                  <Typography color="success">Present Days</Typography>
+                  <Typography variant="h4">{summary.presentDays}</Typography>
+                </Box>
+                <Box>
+                  <Typography color="error">Absent Days</Typography>
+                  <Typography variant="h4">{summary.absentDays}</Typography>
+                </Box>
+                <Box>
+                  <Typography color="warning.main">Half Days</Typography>
+                  <Typography variant="h4">{summary.halfDays}</Typography>
+                </Box>
+                <Box>
+                  <Typography color="info">Total Hours Worked</Typography>
+                  <Typography variant="h4">{summary.totalHours} hrs</Typography>
+                </Box>
+              </Box>
+            </Paper>
+
+            {filteredRecords.length === 0 ? (
+              <Typography>No attendance records found</Typography>
+            ) : (
+              <TableContainer component={Paper} sx={{ backgroundColor: colors.primary[400] }}>
+                <Table>
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>ID</TableCell>
+                      <TableCell>Date</TableCell>
+                      <TableCell>IN</TableCell>
+                      <TableCell>OUT</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {filteredRecords.map((record) => (
+                      <TableRow key={record.id}>
+                        <TableCell>{record.id}</TableCell>
+                        <TableCell>{dayjs(record.date).format("YYYY-MM-DD")}</TableCell>
+                        <TableCell>{record.in_time ? dayjs(record.in_time).format("HH:mm:ss") : "Not clocked in"}</TableCell>
+                        <TableCell>{record.out_time ? dayjs(record.out_time).format("HH:mm:ss") : "Not clocked out"}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )}
+          </Box>
+        </>
+      )}
     </Box>
   );
 };
 
-export default EmployeeAttendance;
+export default AttendanceSummary;
